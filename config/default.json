@@ -1,0 +1,51 @@
+{
+  "browser": {
+    "headless": false,
+    "viewport": { "width": 1200, "height": 800 },
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+  },
+  "session": {
+    "path": "./sessions",
+    "filename": "session.json"
+  },
+  "media": {
+    "enabled": true,
+    "path": "./media",
+    "downloadTypes": ["image", "video", "audio", "document", "sticker"],
+    "maxFileSize": "50MB",
+    "concurrentDownloads": 3
+  },
+  "webhook": {
+    "enabled": false,
+    "endpoint": "/webhook",
+    "retries": 3,
+    "protocol": "https",
+    "url": "https://webhook.site/da6931fa-d6d3-4cd0-8a6a-acd645a8d6f5"
+  },
+  "nats": {
+    "enabled": true,
+    "url": "nats://localhost:4222",
+    "stream": {
+      "name": "WHATSAPP_EVENTS",
+      "subjects": ["whatsapp.events"],
+      "retention": "limits",
+      "max_age": "7d",
+      "max_msgs": 1000000,
+      "duplicate_window": "2m"
+    },
+    "consumers": {
+      "webhook": {
+        "durable_name": "webhook-sender",
+        "ack_policy": "explicit",
+        "max_deliver": 3,
+        "ack_wait": "30s"
+      },
+      "media": {
+        "durable_name": "media-downloader",
+        "ack_policy": "explicit", 
+        "max_deliver": 5,
+        "ack_wait": "60s"
+      }
+    }
+  }
+}
