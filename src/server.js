@@ -41,7 +41,7 @@ class EventServer {
     const html = `<!DOCTYPE html>
 <html>
 <head>
-  <title>WRadar - Event Monitor</title>
+  <title>Event Monitor</title>
   <style>
     body { font-family: monospace; margin: 20px; background: #1a1a1a; color: #00ff00; }
     .header { color: #ffff00; margin-bottom: 20px; }
@@ -55,8 +55,8 @@ class EventServer {
 </head>
 <body>
   <div class="header">
-    <h1>WRadar - Event Monitor</h1>
-    <p>Real-time WhatsApp Web event capture</p>
+    <h1>Event Monitor</h1>
+    <p>Real-time event capture</p>
   </div>
   <div class="stats">
     <div>Events: <span id="count">0</span></div>
@@ -89,7 +89,7 @@ class EventServer {
         eventCount++;
         countSpan.textContent = eventCount;
       } catch (err) {
-        console.error('Failed to parse event:', err);
+        // console.error('Failed to parse event:', err);
       }
     };
 

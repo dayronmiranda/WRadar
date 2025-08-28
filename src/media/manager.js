@@ -433,7 +433,7 @@ class MediaManager {
             throw new Error('Message does not contain downloadable media');
           }
 
-          console.log('[Browser] Downloading media for message:', msgIdObj._serialized);
+          // console.log('[Browser] Downloading media for message:', msgIdObj._serialized);
           
           // Download media
           const mediaBlob = await window.Store.downloadMedia(message);
@@ -468,7 +468,7 @@ class MediaManager {
             throw new Error('Failed to convert media to base64');
           }
 
-          console.log('[Browser] Successfully downloaded media, size:', base64Data.length);
+          // console.log('[Browser] Successfully downloaded media, size:', base64Data.length);
 
           return {
             success: true,
@@ -477,7 +477,7 @@ class MediaManager {
           };
 
         } catch (error) {
-          console.log('[Browser] Download error:', error.message);
+          // console.log('[Browser] Download error:', error.message);
           return {
             success: false,
             error: error.message
