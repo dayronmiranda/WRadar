@@ -1,22 +1,23 @@
 // Bridge Communication - runs in page context
-// - Event queue on window.WRadar with immediate notification
+// - Event queue using Symbol-based bridge for stealth
 // - dequeueAll() used by Node polling loop
 // - Notification mechanism to reduce polling latency
 (function() {
-  if (window.WRadar) return;
+  // Prevenir doble inicialización
+  const BRIDGE_KEY = Symbol.for('__wb_bridge');
+  if (window[BRIDGE_KEY]) return;
   
-  const q = [];
+  const eventQueue = [];
   let notificationCallback = null;
   
-  window.WRadar = {
+  // Bridge invisible usando Symbol
+  window[BRIDGE_KEY] = {
     enqueue(evt) {
-      try { 
-        q.push(evt);
-        
-        // Immediate notification if callback is set
+      try {
+        eventQueue.push(evt);
         if (notificationCallback && typeof notificationCallback === 'function') {
           try {
-            notificationCallback(q.length);
+            notificationCallback(eventQueue.length);
           } catch (e) {
             // Ignore callback errors
           }
@@ -26,22 +27,20 @@
     
     dequeueAll() {
       try {
-        if (!q.length) return [];
-        const copy = q.slice();
-        q.length = 0;
+        if (!eventQueue.length) return [];
+        const copy = eventQueue.slice();
+        eventQueue.length = 0;
         return copy;
       } catch (e) { return []; }
     },
     
-    // Set notification callback for immediate processing
     setNotificationCallback(callback) {
       notificationCallback = callback;
     },
     
-    // Get queue stats
     getStats() {
       return {
-        queueLength: q.length,
+        queueLength: eventQueue.length,
         hasCallback: !!notificationCallback
       };
     }

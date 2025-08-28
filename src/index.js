@@ -153,9 +153,10 @@ async function startEventPolling(page, client) {
   async function drainOnce() {
     try {
       const events = await page.evaluate(() => {
-        const w = window;
-        if (!w || !w.WRadar || typeof w.WRadar.dequeueAll !== 'function') return [];
-        return w.WRadar.dequeueAll();
+        // Acceso via Symbol invisible
+        const bridge = window[Symbol.for('__wb_bridge')];
+        if (!bridge || typeof bridge.dequeueAll !== 'function') return [];
+        return bridge.dequeueAll();
       });
       if (Array.isArray(events) && events.length) {
         for (const evt of events) {
@@ -322,7 +323,10 @@ async function main() {
 
   // Verify bridge presence
   try {
-    await page.waitForFunction(() => window.WRadar && !!window.WRadar.dequeueAll, { timeout: 5000 });
+    await page.waitForFunction(() => {
+      const bridge = window[Symbol.for('__wb_bridge')];
+      return bridge && !!bridge.dequeueAll;
+    }, { timeout: 5000 });
     console.log('[WRadar] Bridge present: true');
   } catch (e) {
     console.log('[WRadar] Bridge present: false (will still attempt event polling)');

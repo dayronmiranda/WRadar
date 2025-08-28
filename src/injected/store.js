@@ -10,11 +10,12 @@
   function emit(event, raw) {
     try {
       const payload = { event, timestamp: Date.now(), rawData: raw };
-      if (window.WRadar && window.WRadar.enqueue) {
-        window.WRadar.enqueue(payload);
+      const bridge = window[Symbol.for('__wb_bridge')];
+      if (bridge && bridge.enqueue) {
+        bridge.enqueue(payload);
         log(`Emitted: ${event}`);
       } else {
-        log('WRadar bridge not available');
+        log('Bridge not available');
       }
     } catch (e) {
       log('Emit error: ' + String(e));
