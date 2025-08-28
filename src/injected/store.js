@@ -1,4 +1,4 @@
-// WhatsApp Store Access - Based on whatsapp-web.js ExposeStore approach
+// WhatsApp Store Access - Complete moduleRaid implementation
 (function() {
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -26,7 +26,15 @@
       const result = {};
       
       // Core message fields
-      if (msg.id) result.id = msg.id;
+      if (msg.id) {
+        // Serialize complete ID object, not just _serialized
+        result.id = {
+          _serialized: msg.id._serialized,
+          fromMe: msg.id.fromMe,
+          remote: msg.id.remote,
+          id: msg.id.id
+        };
+      }
       if (msg.body) result.body = msg.body;
       if (msg.type) result.type = msg.type;
       if (msg.from) result.from = msg.from;
@@ -35,13 +43,17 @@
       if (msg.ack !== undefined) result.ack = msg.ack;
       if (msg.isNewMsg !== undefined) result.isNewMsg = msg.isNewMsg;
       
-      // Media fields
+      // Media fields - complete serialization
       if (msg.mediaKey) result.mediaKey = msg.mediaKey;
+      if (msg.mediaKeyTimestamp) result.mediaKeyTimestamp = msg.mediaKeyTimestamp;
       if (msg.mimetype) result.mimetype = msg.mimetype;
       if (msg.filehash) result.filehash = msg.filehash;
+      if (msg.encFilehash) result.encFilehash = msg.encFilehash;
       if (msg.size) result.size = msg.size;
       if (msg.clientUrl) result.clientUrl = msg.clientUrl;
       if (msg.directPath) result.directPath = msg.directPath;
+      if (msg.mediaData) result.mediaData = msg.mediaData;
+      if (msg.thumbnail) result.thumbnail = msg.thumbnail;
       
       // Additional fields
       if (msg.star) result.star = msg.star;
@@ -68,23 +80,209 @@
     }
   }
 
+  function moduleRaid() {
+    // Complete module raid implementation
+    const modules = {};
+    
+    if (window.webpackChunkwhatsapp_web_client) {
+      const chunk = window.webpackChunkwhatsapp_web_client;
+      
+      // Get webpack require function
+      let webpackRequire;
+      chunk.push([
+        ['__moduleRaid__'],
+        {},
+        (r) => { webpackRequire = r; }
+      ]);
+      
+      if (webpackRequire && webpackRequire.cache) {
+        log('Starting module raid...');
+        
+        // Extract all modules
+        for (const moduleId in webpackRequire.cache) {
+          try {
+            const module = webpackRequire.cache[moduleId];
+            if (module && module.exports) {
+              modules[moduleId] = module.exports;
+            }
+          } catch (_) {}
+        }
+        
+        log(`Found ${Object.keys(modules).length} modules`);
+        return modules;
+      }
+    }
+    
+    return modules;
+  }
+
+  function findModule(condition) {
+    const modules = moduleRaid();
+    
+    for (const moduleId in modules) {
+      try {
+        const module = modules[moduleId];
+        if (condition(module)) {
+          log(`Found module: ${moduleId}`);
+          return module;
+        }
+      } catch (_) {}
+    }
+    
+    return null;
+  }
+
+  function findModules(condition) {
+    const modules = moduleRaid();
+    const found = [];
+    
+    for (const moduleId in modules) {
+      try {
+        const module = modules[moduleId];
+        if (condition(module)) {
+          found.push(module);
+        }
+      } catch (_) {}
+    }
+    
+    return found;
+  }
+
   function exposeStore() {
     try {
-      log('Attempting to expose Store using window.require...');
+      log('Starting Store exposure with module raid...');
       
-      // Check if window.require is available
-      if (!window.require) {
-        log('window.require not available');
-        return false;
+      // Initialize Store object
+      window.Store = {};
+      
+      // Find Collections (Msg, Chat, Contact, etc.)
+      const collections = findModule(m => 
+        m && m.Msg && m.Chat && m.Contact && 
+        typeof m.Msg.add === 'function' &&
+        typeof m.Chat.add === 'function'
+      );
+      
+      if (collections) {
+        Object.assign(window.Store, collections);
+        log('Found Collections module');
       }
-
-      // Build Store object like whatsapp-web.js does
-      window.Store = Object.assign({}, window.require('WAWebCollections'));
-      window.Store.Conn = window.require('WAWebConnModel').Conn;
-      window.Store.Cmd = window.require('WAWebCmd').Cmd;
-      window.Store.User = window.require('WAWebUserPrefsMeUser');
       
-      log('Store exposed successfully');
+      // Find Connection module
+      const connModule = findModule(m => 
+        m && m.Conn && m.Conn.on && 
+        typeof m.Conn.on === 'function'
+      );
+      
+      if (connModule) {
+        window.Store.Conn = connModule.Conn;
+        log('Found Connection module');
+      }
+      
+      // Find DownloadManager - multiple patterns
+      let downloadManager = findModule(m => 
+        m && m.downloadManager && 
+        typeof m.downloadManager.downloadMedia === 'function'
+      );
+      
+      if (!downloadManager) {
+        downloadManager = findModule(m => 
+          m && m.downloadMedia && 
+          typeof m.downloadMedia === 'function'
+        );
+      }
+      
+      if (downloadManager) {
+        window.Store.DownloadManager = downloadManager.downloadManager || downloadManager;
+        log('Found DownloadManager module');
+      }
+      
+      // Find Media utilities
+      const mediaUtils = findModule(m => 
+        m && (m.decryptMedia || m.downloadMedia) && 
+        (typeof m.decryptMedia === 'function' || typeof m.downloadMedia === 'function')
+      );
+      
+      if (mediaUtils) {
+        window.Store.MediaUtils = mediaUtils;
+        log('Found MediaUtils module');
+      }
+      
+      // Find OpaqueData for media handling
+      const opaqueData = findModule(m => 
+        m && m.createFromData && 
+        typeof m.createFromData === 'function'
+      );
+      
+      if (opaqueData) {
+        window.Store.OpaqueData = opaqueData;
+        log('Found OpaqueData module');
+      }
+      
+      // Find MediaPrep
+      const mediaPrep = findModule(m => 
+        m && m.prepRawMedia && 
+        typeof m.prepRawMedia === 'function'
+      );
+      
+      if (mediaPrep) {
+        window.Store.MediaPrep = mediaPrep;
+        log('Found MediaPrep module');
+      }
+      
+      // Add helper function for media download
+      window.Store.downloadMedia = async function(messageId) {
+        try {
+          // Find message by ID
+          let message = null;
+          
+          if (typeof messageId === 'string') {
+            // Find by serialized ID
+            message = window.Store.Msg.get(messageId);
+          } else if (messageId && messageId._serialized) {
+            // Find by ID object
+            message = window.Store.Msg.get(messageId._serialized);
+          } else {
+            // Assume it's already a message object
+            message = messageId;
+          }
+          
+          if (!message) {
+            throw new Error('Message not found');
+          }
+          
+          // Method 1: Try message's own downloadMedia method
+          if (message.downloadMedia && typeof message.downloadMedia === 'function') {
+            log('Using message.downloadMedia()');
+            return await message.downloadMedia();
+          }
+          
+          // Method 2: Try DownloadManager
+          if (window.Store.DownloadManager && window.Store.DownloadManager.downloadMedia) {
+            log('Using DownloadManager.downloadMedia()');
+            return await window.Store.DownloadManager.downloadMedia(message);
+          }
+          
+          // Method 3: Try MediaUtils
+          if (window.Store.MediaUtils && window.Store.MediaUtils.downloadMedia) {
+            log('Using MediaUtils.downloadMedia()');
+            return await window.Store.MediaUtils.downloadMedia(message);
+          }
+          
+          // Method 4: Try direct decryption if we have the utilities
+          if (window.Store.MediaUtils && window.Store.MediaUtils.decryptMedia && message.mediaKey) {
+            log('Using MediaUtils.decryptMedia()');
+            // This would need the encrypted media first
+            throw new Error('Direct decryption not implemented yet');
+          }
+          
+          throw new Error('No download method available');
+        } catch (error) {
+          log('Download error: ' + error.message);
+          throw error;
+        }
+      };
+      
+      log('Store exposed successfully with media support');
       return true;
     } catch (e) {
       log('Failed to expose Store: ' + String(e));
@@ -101,46 +299,12 @@
       return window.Store;
     }
 
-    // Method 2: Try to expose Store using window.require
+    // Method 2: Try to expose Store using moduleRaid
     if (exposeStore()) {
       if (window.Store && window.Store.Msg && window.Store.Conn) {
         log('Successfully exposed and found Store');
         return window.Store;
       }
-    }
-
-    // Method 3: Try webpack chunk approach as fallback
-    try {
-      if (window.webpackChunkwhatsapp_web_client) {
-        const chunk = window.webpackChunkwhatsapp_web_client;
-        
-        // Push a dummy chunk to get access to webpack require
-        let webpackRequire;
-        chunk.push([
-          ['__WRadar__'],
-          {},
-          (r) => { webpackRequire = r; }
-        ]);
-        
-        if (webpackRequire) {
-          log('Got webpack require via chunk');
-          // Set window.require if not available
-          if (!window.require) {
-            window.require = webpackRequire;
-            log('Set window.require from webpack');
-            
-            // Try to expose Store again
-            if (exposeStore()) {
-              if (window.Store && window.Store.Msg && window.Store.Conn) {
-                log('Successfully exposed Store via webpack require');
-                return window.Store;
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      log('Webpack chunk approach failed: ' + String(e));
     }
 
     log('No Store found');
@@ -247,6 +411,9 @@
     emit('store_ready', { 
       hasMsg: !!Store.Msg, 
       hasConn: !!Store.Conn,
+      hasDownloadManager: !!Store.DownloadManager,
+      hasMediaUtils: !!Store.MediaUtils,
+      hasDownloadMedia: !!Store.downloadMedia,
       msgMethods: Store.Msg ? Object.getOwnPropertyNames(Store.Msg) : [],
       connMethods: Store.Conn ? Object.getOwnPropertyNames(Store.Conn) : [],
       connState: Store.Conn && Store.Conn.state
