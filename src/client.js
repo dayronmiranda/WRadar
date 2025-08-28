@@ -6,13 +6,13 @@
 */
 const EventEmitter = require('events');
 const Webhook = require('./webhook');
-const Media = require('./media');
+const { MediaManager } = require('./media/manager');
 
 class Client extends EventEmitter {
-  constructor({ webhook, media, storageDir, eventServer, natsPublisher }) {
+  constructor({ webhook, media, storageDir, eventServer, natsPublisher, page }) {
     super();
     this.webhook = new Webhook(webhook);
-    this.media = new Media({ mediaConfig: media, storageDir });
+    this.media = new MediaManager(page, storageDir, media);
     this.eventServer = eventServer;
     this.webhookConfig = webhook;
     this.natsPublisher = natsPublisher;

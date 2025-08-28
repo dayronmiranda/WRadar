@@ -132,9 +132,10 @@ class MediaConsumer {
 
     try {
       if (this.mediaQueue) {
-        // Use media queue for browser-based downloads
-        const enqueued = await this.mediaQueue.enqueue(messageId, rawData);
-        if (enqueued) {
+        // Use media manager for browser-based downloads
+        // MediaManager handles enqueueing internally via maybeEnrich
+        const enrichedEvent = await this.mediaQueue.maybeEnrich({ rawData: rawData });
+        if (enrichedEvent.localMedia && enrichedEvent.localMedia.queued) {
           this.mediaStates.set(messageId, MEDIA_STATES.PENDING);
           console.log(`[NATS:MediaConsumer] Queued ${rawData.type} for download: ${messageId}`);
         }

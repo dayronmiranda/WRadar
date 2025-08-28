@@ -19,7 +19,7 @@ const NatsClient = require('./nats/client');
 const NatsPublisher = require('./nats/publisher');
 const WebhookConsumer = require('./nats/consumers/webhook');
 const { MediaConsumer } = require('./nats/consumers/media');
-const { MediaQueue } = require('./media/queue');
+const { MediaManager } = require('./media/manager');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const INJECTED_DIR = path.join(__dirname, 'injected');
@@ -178,7 +178,7 @@ async function main() {
   let natsPublisher = null;
   let webhookConsumer = null;
   let mediaConsumer = null;
-  let mediaQueue = null;
+  let mediaManager = null;
 
   // Start event server
   const eventServer = new EventServer(config.webhook.port || 3001);
@@ -214,14 +214,14 @@ async function main() {
 
   await session.restore(page);
 
-  // Initialize media queue (requires browser page)
+  // Initialize media manager (requires browser page)
   if (config.media.enabled) {
-    mediaQueue = new MediaQueue(
+    mediaManager = new MediaManager(
       page, 
       path.resolve(PROJECT_ROOT, config.media.path),
       config.media
     );
-    console.log('[WRadar] Media download queue initialized');
+    console.log('[WRadar] Media manager initialized');
   }
 
   if (config.nats && config.nats.enabled) {
@@ -240,7 +240,7 @@ async function main() {
           natsClient, 
           config.media, 
           path.resolve(PROJECT_ROOT, config.media.path),
-          mediaQueue
+          mediaManager
         );
         await mediaConsumer.start();
         
@@ -259,7 +259,8 @@ async function main() {
     media: config.media,
     storageDir: path.resolve(PROJECT_ROOT, config.media.path),
     eventServer: eventServer,
-    natsPublisher: natsPublisher
+    natsPublisher: natsPublisher,
+    page: page
   });
 
   // Show configuration
@@ -279,8 +280,8 @@ async function main() {
     }
   }
 
-  if (mediaQueue) {
-    console.log('[WRadar] Media downloads: Browser-based with queue');
+  if (mediaManager) {
+    console.log('[WRadar] Media downloads: Browser-based with unified manager');
   } else {
     console.log('[WRadar] Media downloads: Disabled');
   }
