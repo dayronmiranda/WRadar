@@ -1,10 +1,11 @@
 /*
- WRadar - Browser Controller / Entry point
+ WRadar - Browser Controller / Entry point (Program A)
  - Launch rebrowser-puppeteer-core
  - Navigate to web.whatsapp.com
  - Inject monitoring scripts (bridge/store)
  - Handle QR and ready events
- - Poll event queue and dispatch via webhook
+ - Poll event queue and stage to NATS JetStream
+ - Monitor Program B health
 */
 
 const fs = require('fs');
@@ -17,9 +18,9 @@ const Session = require('./session');
 const EventServer = require('./server');
 const NatsClient = require('./nats/client');
 const NatsPublisher = require('./nats/publisher');
-const WebhookConsumer = require('./nats/consumers/webhook');
 const { MediaConsumer } = require('./nats/consumers/media');
 const { MediaManager } = require('./media/manager');
+const ProgramBChecker = require('./health/program_b_checker');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const INJECTED_DIR = path.join(__dirname, 'injected');
@@ -177,12 +178,12 @@ async function main() {
   // Initialize NATS (optional)
   let natsClient = null;
   let natsPublisher = null;
-  let webhookConsumer = null;
   let mediaConsumer = null;
   let mediaManager = null;
+  let programBChecker = null;
 
   // Start event server
-  const eventServer = new EventServer(config.webhook.port || 3001);
+  const eventServer = new EventServer(3001);
   eventServer.start();
 
   console.log('[WRadar] Launching browser...');
@@ -233,10 +234,7 @@ async function main() {
       if (connected) {
         natsPublisher = new NatsPublisher(natsClient);
         
-        // Start consumers
-        webhookConsumer = new WebhookConsumer(natsClient, config.webhook);
-        await webhookConsumer.start();
-        
+        // Start media consumer (Program A responsibility)
         mediaConsumer = new MediaConsumer(
           natsClient, 
           config.media, 
@@ -245,18 +243,26 @@ async function main() {
         );
         await mediaConsumer.start();
         
-        console.log('[WRadar] NATS JetStream initialized with consumers');
+        // Initialize Program B health checker
+        programBChecker = new ProgramBChecker(natsClient, {
+          healthEndpoint: 'http://localhost:3002/health',
+          maxQueueDepth: 1000,
+          checkInterval: 30000
+        });
+        await programBChecker.start();
+        
+        console.log('[WRadar] NATS JetStream initialized (Program A scope)');
+        console.log('[WRadar] Program B health monitoring started');
       }
     } catch (error) {
       console.log(`[WRadar] NATS initialization failed: ${error.message}`);
-      console.log('[WRadar] Continuing without NATS (direct webhook mode)');
+      console.log('[WRadar] Continuing without NATS - events will be local only');
     }
   } else {
     console.log('[WRadar] NATS disabled in config');
   }
 
   const client = new Client({
-    webhook: config.webhook,
     media: config.media,
     storageDir: path.resolve(PROJECT_ROOT, config.media.path),
     eventServer: eventServer,
@@ -266,19 +272,14 @@ async function main() {
 
   // Show configuration
   if (natsPublisher) {
-    console.log('[WRadar] Event routing: WhatsApp → NATS JetStream → Consumers');
+    console.log('[WRadar] Event routing: WhatsApp → NATS JetStream staging → Program B');
     const stats = await natsPublisher.getStats();
     if (stats.stream) {
       console.log(`[WRadar] NATS Stream: ${stats.stream.name} (${stats.stream.messages} messages)`);
     }
   } else {
-    console.log('[WRadar] Event routing: WhatsApp → Direct webhook');
-    if (config.webhook.enabled) {
-      const webhookInfo = client.webhook.getInfo();
-      console.log(`[WRadar] External webhook: ${webhookInfo.url}`);
-    } else {
-      console.log('[WRadar] External webhook: disabled');
-    }
+    console.log('[WRadar] Event routing: WhatsApp → Local server only (no staging)');
+    console.log('[WRadar] ⚠️  NATS disabled - events will not be processed by Program B');
   }
 
   if (mediaManager) {
@@ -353,9 +354,9 @@ async function main() {
     clearInterval(persistInterval);
     await persist();
     
-    // Stop NATS consumers
-    if (webhookConsumer) {
-      await webhookConsumer.stop();
+    // Stop NATS consumers and health checker
+    if (programBChecker) {
+      await programBChecker.stop();
     }
     if (mediaConsumer) {
       await mediaConsumer.stop();

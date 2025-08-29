@@ -1,25 +1,23 @@
 /*
- Event Client
+ Event Client - Program A
  - EventEmitter for all events
- - Routes events to NATS JetStream
- - Fallback to direct webhook if NATS unavailable
+ - Routes events to NATS JetStream staging
+ - Media enrichment and processing
+ - No direct webhook handling (Program B responsibility)
 */
 const EventEmitter = require('events');
-const Webhook = require('./webhook');
 const { MediaManager } = require('./media/manager');
 
 class Client extends EventEmitter {
-  constructor({ webhook, media, storageDir, eventServer, natsPublisher, page }) {
+  constructor({ media, storageDir, eventServer, natsPublisher, page }) {
     super();
-    this.webhook = new Webhook(webhook);
     this.media = new MediaManager(page, storageDir, media);
     this.eventServer = eventServer;
-    this.webhookConfig = webhook;
     this.natsPublisher = natsPublisher;
   }
 
   async emitEvent(evt) {
-    // Process event
+    // Process event with media enrichment
     let payload = evt;
     try {
       payload = await this.media.maybeEnrich(evt);
@@ -33,26 +31,18 @@ class Client extends EventEmitter {
       console.log(`[WRadar:client] Sent to server: ${payload.event}`);
     }
     
-    // Primary: Send to NATS JetStream
+    // Send to NATS JetStream staging (Program A responsibility)
     if (this.natsPublisher) {
       const published = await this.natsPublisher.publishEvent(payload);
       
       if (!published) {
-        // Fallback: Send directly to webhook if NATS failed
-        console.log('[WRadar:client] NATS failed, falling back to direct webhook');
-        if (this.webhookConfig && this.webhookConfig.enabled) {
-          this.webhook.dispatch(payload).catch((err) => {
-            console.log('[WRadar] Webhook fallback failed:', err.message);
-          });
-        }
+        console.log('[WRadar:client] ⚠️  NATS staging failed - event may be lost');
+        console.log('[WRadar:client] Check NATS connection and Program B availability');
+      } else {
+        console.log(`[WRadar:client] Staged to NATS: ${payload.event}`);
       }
     } else {
-      // No NATS: Send directly to webhook
-      if (this.webhookConfig && this.webhookConfig.enabled) {
-        this.webhook.dispatch(payload).catch((err) => {
-          console.log('[WRadar] Webhook failed:', err.message);
-        });
-      }
+      console.log('[WRadar:client] ⚠️  No NATS publisher - events not staged');
     }
     
     // Emit for any other listeners

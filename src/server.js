@@ -24,8 +24,6 @@ class EventServer {
         this.serveHTML(res);
       } else if (url.pathname === '/events') {
         this.serveSSE(req, res);
-      } else if (url.pathname === '/webhook' && req.method === 'POST') {
-        this.handleWebhook(req, res);
       } else {
         res.writeHead(404);
         res.end('Not Found');
