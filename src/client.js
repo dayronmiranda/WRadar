@@ -1,9 +1,8 @@
 /*
- Event Client - Program A
+ Event Client
  - EventEmitter for all events
- - Routes events to NATS JetStream staging
+ - Routes events to NATS
  - Media enrichment and processing
- - No direct webhook handling (Program B responsibility)
 */
 const EventEmitter = require('events');
 const { MediaManager } = require('./media/manager');
@@ -14,6 +13,12 @@ class Client extends EventEmitter {
     this.media = new MediaManager(page, storageDir, media);
     this.eventServer = eventServer;
     this.natsPublisher = natsPublisher;
+  }
+
+  updatePhoneNumber(phoneNumber) {
+    if (this.natsPublisher) {
+      this.natsPublisher.updatePhoneNumber(phoneNumber);
+    }
   }
 
   async emitEvent(evt) {
@@ -31,18 +36,18 @@ class Client extends EventEmitter {
       console.log(`[WRadar:client] Sent to server: ${payload.event}`);
     }
     
-    // Send to NATS JetStream staging (Program A responsibility)
+    // Send to NATS
     if (this.natsPublisher) {
       const published = await this.natsPublisher.publishEvent(payload);
       
       if (!published) {
-        console.log('[WRadar:client] ⚠️  NATS staging failed - event may be lost');
-        console.log('[WRadar:client] Check NATS connection and Program B availability');
+        console.log('[WRadar:client] ⚠️  NATS publish failed - event may be lost');
+        console.log('[WRadar:client] Check NATS connection');
       } else {
-        console.log(`[WRadar:client] Staged to NATS: ${payload.event}`);
+        console.log(`[WRadar:client] Published to NATS: ${payload.event}`);
       }
     } else {
-      console.log('[WRadar:client] ⚠️  No NATS publisher - events not staged');
+      console.log('[WRadar:client] ⚠️  No NATS publisher - events not published');
     }
     
     // Emit for any other listeners

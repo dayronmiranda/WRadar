@@ -1,12 +1,11 @@
 /*
- WRadar - Browser Controller / Entry point (Program A)
+ WRadar - Browser Controller / Entry point
  - Launch rebrowser-puppeteer-core
  - Navigate to web.whatsapp.com
  - Inject monitoring scripts (bridge/store)
  - Handle QR and ready events
- - Poll event queue and publish to NATS JetStream staging
+ - Poll event queue and publish to NATS
  - Download media using browser context
- - Monitor Program B health
 */
 
 const fs = require('fs');
@@ -20,7 +19,6 @@ const EventServer = require('./server');
 const NatsClient = require('./nats/client');
 const NatsPublisher = require('./nats/publisher');
 const { MediaManager } = require('./media/manager');
-const ProgramBChecker = require('./health/program_b_checker');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const INJECTED_DIR = path.join(__dirname, 'injected');
@@ -135,6 +133,9 @@ async function detectReady(page, client) {
       );
       if (found) {
         client.emitEvent({ event: 'ready', timestamp: Date.now(), rawData: { state: 'ready', via: 'selector', selector: found } });
+        
+        // Try to detect phone number after ready
+        await detectPhoneNumber(page, client);
         return;
       }
     } catch (_) {
@@ -144,9 +145,73 @@ async function detectReady(page, client) {
       const hasStoreConn = await page.evaluate(() => !!(window.Store && window.Store.Conn));
       if (hasStoreConn) {
         client.emitEvent({ event: 'ready', timestamp: Date.now(), rawData: { state: 'ready', via: 'store' } });
+        
+        // Try to detect phone number after ready
+        await detectPhoneNumber(page, client);
         return;
       }
     } catch (_) {}
+  }
+}
+
+async function detectPhoneNumber(page, client) {
+  try {
+    // Wait a bit for WhatsApp to fully load
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    const phoneNumber = await page.evaluate(() => {
+      try {
+        // Method 1: Try to get from Store.Conn.me
+        if (window.Store && window.Store.Conn && window.Store.Conn.me) {
+          const me = window.Store.Conn.me;
+          if (me.user) {
+            return me.user; // This should be the phone number without @c.us
+          }
+        }
+        
+        // Method 2: Try to get from localStorage
+        const waUser = localStorage.getItem('last-wid-md');
+        if (waUser) {
+          const match = waUser.match(/(\d+)@/);
+          if (match) {
+            return match[1];
+          }
+        }
+        
+        // Method 3: Try to get from any stored user data
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.includes('wid')) {
+            const value = localStorage.getItem(key);
+            if (value) {
+              const match = value.match(/(\d+)@/);
+              if (match) {
+                return match[1];
+              }
+            }
+          }
+        }
+        
+        return null;
+      } catch (e) {
+        console.log('Error detecting phone number:', e);
+        return null;
+      }
+    });
+    
+    if (phoneNumber) {
+      console.log(`[WRadar] Detected phone number: ${phoneNumber}`);
+      client.updatePhoneNumber(phoneNumber);
+      client.emitEvent({ 
+        event: 'phone_number_detected', 
+        timestamp: Date.now(), 
+        rawData: { phoneNumber } 
+      });
+    } else {
+      console.log('[WRadar] Could not detect phone number');
+    }
+  } catch (e) {
+    console.log('[WRadar] Error in phone number detection:', e.message);
   }
 }
 
@@ -179,7 +244,6 @@ async function main() {
   let natsClient = null;
   let natsPublisher = null;
   let mediaManager = null;
-  let programBChecker = null;
 
   // Start event server for local debugging
   const eventServer = new EventServer(3001);
@@ -231,18 +295,11 @@ async function main() {
       const connected = await natsClient.connect();
       
       if (connected) {
-        natsPublisher = new NatsPublisher(natsClient);
-        
-        // Initialize Program B health checker
-        programBChecker = new ProgramBChecker(natsClient, {
-          healthEndpoint: 'http://localhost:3002/health',
-          maxQueueDepth: 1000,
-          checkInterval: 30000
+        natsPublisher = new NatsPublisher(natsClient, {
+          phoneNumber: config.whatsapp?.phoneNumber || ''
         });
-        await programBChecker.start();
         
-        console.log('[WRadar] NATS JetStream initialized for event staging');
-        console.log('[WRadar] Program B health monitoring started');
+        console.log('[WRadar] NATS initialized');
       }
     } catch (error) {
       console.log(`[WRadar] NATS initialization failed: ${error.message}`);
@@ -262,14 +319,15 @@ async function main() {
 
   // Show configuration
   if (natsPublisher) {
-    console.log('[WRadar] Event routing: WhatsApp → NATS JetStream staging → Program B');
+    console.log('[WRadar] Event routing: WhatsApp → Scripts → Client → NATS');
+    console.log(`[WRadar] NATS Subject: ${natsPublisher.subject}`);
     const stats = await natsPublisher.getStats();
     if (stats.stream) {
       console.log(`[WRadar] NATS Stream: ${stats.stream.name} (${stats.stream.messages} messages)`);
     }
   } else {
-    console.log('[WRadar] Event routing: WhatsApp → Local server only (no staging)');
-    console.log('[WRadar] ⚠️  NATS disabled - events will not be processed by Program B');
+    console.log('[WRadar] Event routing: WhatsApp → Scripts → Client → Local server only');
+    console.log('[WRadar] ⚠️  NATS disabled - events will not be published');
   }
 
   if (mediaManager) {
@@ -343,11 +401,6 @@ async function main() {
     stopPolling();
     clearInterval(persistInterval);
     await persist();
-    
-    // Stop health checker
-    if (programBChecker) {
-      await programBChecker.stop();
-    }
     
     // Close NATS connection
     if (natsClient) {

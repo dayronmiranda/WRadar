@@ -6,9 +6,17 @@
 */
 
 class NatsPublisher {
-  constructor(natsClient) {
+  constructor(natsClient, config = {}) {
     this.natsClient = natsClient;
-    this.subject = 'whatsapp.events';
+    this.baseSubject = 'whatsapp.events';
+    this.phoneNumber = config.phoneNumber || '';
+    this.subject = this.phoneNumber ? `whatsapp.${this.phoneNumber}.events` : this.baseSubject;
+  }
+
+  updatePhoneNumber(phoneNumber) {
+    this.phoneNumber = phoneNumber;
+    this.subject = phoneNumber ? `whatsapp.${phoneNumber}.events` : this.baseSubject;
+    console.log(`[NATS:Publisher] Updated subject to: ${this.subject}`);
   }
 
   async publishEvent(event) {
