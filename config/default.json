@@ -13,7 +13,18 @@
     "path": "./media",
     "downloadTypes": ["image", "video", "audio", "document", "sticker"],
     "maxFileSize": "50MB",
-    "concurrentDownloads": 3
+    "concurrentDownloads": 3,
+    "maxQueueSize": 1000,
+    "retryAttempts": 3,
+    "retryDelayMs": 5000,
+    "batchProcessSize": 10,
+    "allowedMimeTypes": [],
+    "enableDeduplication": true,
+    "enableIntegrityCheck": true,
+    "cleanupCompletedAfterMs": 86400000,
+    "pauseOnHighMemoryMB": 1024,
+    "circuitBreakerThreshold": 10,
+    "circuitBreakerResetMs": 60000
   },
   "nats": {
     "enabled": true,
@@ -25,14 +36,6 @@
       "max_age": "7d",
       "max_msgs": 1000000,
       "duplicate_window": "2m"
-    },
-    "consumers": {
-      "media": {
-        "durable_name": "media-downloader",
-        "ack_policy": "explicit", 
-        "max_deliver": 5,
-        "ack_wait": "60s"
-      }
     }
   }
 }

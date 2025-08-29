@@ -4,7 +4,8 @@
  - Navigate to web.whatsapp.com
  - Inject monitoring scripts (bridge/store)
  - Handle QR and ready events
- - Poll event queue and stage to NATS JetStream
+ - Poll event queue and publish to NATS JetStream staging
+ - Download media using browser context
  - Monitor Program B health
 */
 
@@ -18,7 +19,6 @@ const Session = require('./session');
 const EventServer = require('./server');
 const NatsClient = require('./nats/client');
 const NatsPublisher = require('./nats/publisher');
-const { MediaConsumer } = require('./nats/consumers/media');
 const { MediaManager } = require('./media/manager');
 const ProgramBChecker = require('./health/program_b_checker');
 
@@ -178,11 +178,10 @@ async function main() {
   // Initialize NATS (optional)
   let natsClient = null;
   let natsPublisher = null;
-  let mediaConsumer = null;
   let mediaManager = null;
   let programBChecker = null;
 
-  // Start event server
+  // Start event server for local debugging
   const eventServer = new EventServer(3001);
   eventServer.start();
 
@@ -223,7 +222,7 @@ async function main() {
       path.resolve(PROJECT_ROOT, config.media.path),
       config.media
     );
-    console.log('[WRadar] Media manager initialized');
+    console.log('[WRadar] Media manager initialized for browser-based downloads');
   }
 
   if (config.nats && config.nats.enabled) {
@@ -234,15 +233,6 @@ async function main() {
       if (connected) {
         natsPublisher = new NatsPublisher(natsClient);
         
-        // Start media consumer (Program A responsibility)
-        mediaConsumer = new MediaConsumer(
-          natsClient, 
-          config.media, 
-          path.resolve(PROJECT_ROOT, config.media.path),
-          mediaManager
-        );
-        await mediaConsumer.start();
-        
         // Initialize Program B health checker
         programBChecker = new ProgramBChecker(natsClient, {
           healthEndpoint: 'http://localhost:3002/health',
@@ -251,7 +241,7 @@ async function main() {
         });
         await programBChecker.start();
         
-        console.log('[WRadar] NATS JetStream initialized (Program A scope)');
+        console.log('[WRadar] NATS JetStream initialized for event staging');
         console.log('[WRadar] Program B health monitoring started');
       }
     } catch (error) {
@@ -354,13 +344,12 @@ async function main() {
     clearInterval(persistInterval);
     await persist();
     
-    // Stop NATS consumers and health checker
+    // Stop health checker
     if (programBChecker) {
       await programBChecker.stop();
     }
-    if (mediaConsumer) {
-      await mediaConsumer.stop();
-    }
+    
+    // Close NATS connection
     if (natsClient) {
       await natsClient.close();
     }
