@@ -34,7 +34,7 @@
     "url": "nats://localhost:4222",
     "stream": {
       "name": "WHATSAPP_EVENTS",
-      "subjects": ["whatsapp.events"],
+      "subjects": ["whatsapp.*.events"],
       "retention": "limits",
       "max_age": "7d",
       "max_msgs": 1000000,

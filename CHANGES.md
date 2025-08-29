@@ -16,7 +16,7 @@
 ### Configuration Changes
 - **New field**: Added `whatsapp.phoneNumber` in config for manual phone number setting
 - **Stream subjects**: Updated to support wildcard pattern `whatsapp.*.events`
-- **Example config**: Created `config/example.json` with phone number example
+- **Updated default config**: Modified `config/default.json` with new phone number field and wildcard subjects
 
 ### Files Modified
 1. **config/default.json**: Added `whatsapp.phoneNumber` field
