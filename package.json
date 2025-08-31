@@ -13,8 +13,9 @@
     "dev": "node src/index.js"
   },
   "dependencies": {
-    "rebrowser-puppeteer-core": "^24.8.1",
     "express": "^5.1.0",
-    "nats": "^2.29.3"
+    "mime-types": "^2.1.35",
+    "nats": "^2.29.3",
+    "rebrowser-puppeteer-core": "^24.8.1"
   }
 }

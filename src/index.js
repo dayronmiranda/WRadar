@@ -76,8 +76,10 @@ function getLaunchOptions() {
 async function prepareInjection(page) {
   const bridgePath = path.join(INJECTED_DIR, 'bridge.js');
   const storePath = path.join(INJECTED_DIR, 'store.js');
+  
   const bridgeCode = fs.readFileSync(bridgePath, 'utf8');
   const storeCode = fs.readFileSync(storePath, 'utf8');
+  
   await page.evaluateOnNewDocument(bridgeCode);
   await page.evaluateOnNewDocument(storeCode);
 }
@@ -133,9 +135,6 @@ async function detectReady(page, client) {
       );
       if (found) {
         client.emitEvent({ event: 'ready', timestamp: Date.now(), rawData: { state: 'ready', via: 'selector', selector: found } });
-        
-        // Try to detect phone number after ready
-        await detectPhoneNumber(page, client);
         return;
       }
     } catch (_) {
@@ -145,9 +144,6 @@ async function detectReady(page, client) {
       const hasStoreConn = await page.evaluate(() => !!(window.Store && window.Store.Conn));
       if (hasStoreConn) {
         client.emitEvent({ event: 'ready', timestamp: Date.now(), rawData: { state: 'ready', via: 'store' } });
-        
-        // Try to detect phone number after ready
-        await detectPhoneNumber(page, client);
         return;
       }
     } catch (_) {}
@@ -316,6 +312,16 @@ async function main() {
     natsPublisher: natsPublisher,
     page: page
   });
+
+  // Use pre-established phone number from config
+  if (config.whatsapp?.phoneNumber) {
+    console.log(`[WRadar] Using pre-established phone number: ${config.whatsapp.phoneNumber}`);
+    client.emitEvent({ 
+      event: 'phone_number_detected', 
+      timestamp: Date.now(), 
+      rawData: { phoneNumber: config.whatsapp.phoneNumber } 
+    });
+  }
 
   // Show configuration
   if (natsPublisher) {

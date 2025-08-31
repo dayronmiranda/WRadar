@@ -3,18 +3,19 @@
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   function log(msg) {
-    // Disable console logs to avoid detection - only emit events
-    // console.log('[WRadar:store]', msg);
+    // Enable console logs temporarily for debugging
+    console.log('[WRadar:store]', msg);
   }
 
   function emit(event, raw) {
     try {
       const payload = { event, timestamp: Date.now(), rawData: raw };
-      if (window.WRadar && window.WRadar.enqueue) {
-        window.WRadar.enqueue(payload);
+      const bridge = window[Symbol.for('__wb_bridge')];
+      if (bridge && bridge.enqueue) {
+        bridge.enqueue(payload);
         log(`Emitted: ${event}`);
       } else {
-        log('WRadar bridge not available');
+        log('Bridge not available');
       }
     } catch (e) {
       log('Emit error: ' + String(e));
@@ -84,7 +85,124 @@
       window.Store.Cmd = window.require('WAWebCmd').Cmd;
       window.Store.User = window.require('WAWebUserPrefsMeUser');
       
-      log('Store exposed successfully');
+      // Add media download functions
+      try {
+        // Try to get download manager
+        const downloadManager = window.require('WAWebDownloadManager');
+        if (downloadManager && downloadManager.downloadMedia) {
+          window.Store.downloadMedia = downloadManager.downloadMedia;
+          log('Added downloadMedia from DownloadManager');
+        }
+      } catch (e) {
+        log('DownloadManager not found: ' + e.message);
+      }
+      
+      try {
+        // Try to get media utilities
+        const mediaUtils = window.require('WAWebMediaUtils');
+        if (mediaUtils) {
+          window.Store.MediaUtils = mediaUtils;
+          log('Added MediaUtils');
+        }
+      } catch (e) {
+        log('MediaUtils not found: ' + e.message);
+      }
+      
+      try {
+        // Try to get OpaqueData for media handling
+        const opaqueData = window.require('WAWebOpaqueData');
+        if (opaqueData) {
+          window.Store.OpaqueData = opaqueData;
+          log('Added OpaqueData');
+        }
+      } catch (e) {
+        log('OpaqueData not found: ' + e.message);
+      }
+      
+      // Try to find and add download functions
+      let downloadFunctionAdded = false;
+      
+      // Method 1: Try to get from message objects directly
+      try {
+        // Get a sample message to check for downloadMedia method
+        const messages = window.Store.Msg.getModelsArray();
+        if (messages && messages.length > 0) {
+          const sampleMessage = messages.find(msg => msg.type && ['image', 'video', 'audio', 'document', 'sticker'].includes(msg.type));
+          if (sampleMessage && sampleMessage.downloadMedia && typeof sampleMessage.downloadMedia === 'function') {
+            window.Store.downloadMedia = async function(message, options = {}) {
+              if (message && message.downloadMedia) {
+                return await message.downloadMedia(options);
+              }
+              throw new Error('Message does not have downloadMedia method');
+            };
+            downloadFunctionAdded = true;
+            log('Added downloadMedia using message method');
+          }
+        }
+      } catch (e) {
+        log('Failed to get downloadMedia from message: ' + e.message);
+      }
+      
+      // Method 2: Try to find download function in modules
+      if (!downloadFunctionAdded) {
+        try {
+          // Try different module patterns for download functions
+          const downloadModules = [
+            'WAWebDownloadManager',
+            'WAWebMediaDownload', 
+            'WAWebMediaUtils',
+            'WAWebBlobUtils'
+          ];
+          
+          for (const moduleName of downloadModules) {
+            try {
+              const module = window.require(moduleName);
+              if (module && module.downloadMedia) {
+                window.Store.downloadMedia = module.downloadMedia;
+                downloadFunctionAdded = true;
+                log('Added downloadMedia from ' + moduleName);
+                break;
+              } else if (module && module.default && module.default.downloadMedia) {
+                window.Store.downloadMedia = module.default.downloadMedia;
+                downloadFunctionAdded = true;
+                log('Added downloadMedia from ' + moduleName + '.default');
+                break;
+              }
+            } catch (e) {
+              log('Module ' + moduleName + ' not found: ' + e.message);
+            }
+          }
+        } catch (e) {
+          log('Failed to find download modules: ' + e.message);
+        }
+      }
+      
+      // Method 3: Create a fallback download function
+      if (!downloadFunctionAdded) {
+        window.Store.downloadMedia = async function(message, options = {}) {
+          try {
+            // Try message's own downloadMedia method first
+            if (message && message.downloadMedia && typeof message.downloadMedia === 'function') {
+              log('Using message.downloadMedia()');
+              return await message.downloadMedia(options);
+            }
+            
+            // Try to find downloadMedia in the message prototype
+            if (message && message.constructor && message.constructor.prototype && message.constructor.prototype.downloadMedia) {
+              log('Using message.constructor.prototype.downloadMedia()');
+              return await message.constructor.prototype.downloadMedia.call(message, options);
+            }
+            
+            throw new Error('No download method available for this message');
+          } catch (error) {
+            log('Download error: ' + error.message);
+            throw error;
+          }
+        };
+        log('Added fallback downloadMedia function');
+      }
+      
+      log('Store exposed successfully with media support');
       return true;
     } catch (e) {
       log('Failed to expose Store: ' + String(e));
@@ -207,32 +325,68 @@
       log('Connection setup error: ' + String(e));
     }
 
-    // Message events
+    // Message events with deduplication
     try {
       if (Store.Msg) {
         log('Setting up message listeners on Store.Msg');
         
+        // Create a cache to track processed messages
+        const processedMessages = new Map();
+        
+        // Helper function to check if message should be processed
+        const shouldProcessMessage = (msg, eventType) => {
+          if (!msg || !msg.id || !msg.id._serialized) return false;
+          
+          const messageId = msg.id._serialized;
+          const key = `${messageId}_${eventType}_${msg.ack || 0}`;
+          
+          if (processedMessages.has(key)) {
+            return false; // Already processed
+          }
+          
+          // Add to cache with expiration (5 minutes)
+          processedMessages.set(key, Date.now());
+          
+          // Clean old entries periodically
+          if (processedMessages.size > 1000) {
+            const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+            for (const [k, timestamp] of processedMessages.entries()) {
+              if (timestamp < fiveMinutesAgo) {
+                processedMessages.delete(k);
+              }
+            }
+          }
+          
+          return true;
+        };
+        
         if (Store.Msg.on) {
           Store.Msg.on('add', (msg) => {
-            log('Message added: ' + (msg.body || msg.type || 'unknown'));
-            emit('message_create', serializeMsg(msg));
+            if (shouldProcessMessage(msg, 'create')) {
+              log('Message added: ' + (msg.body || msg.type || 'unknown'));
+              emit('message_create', serializeMsg(msg));
+            }
           });
           
           Store.Msg.on('change', (msg) => {
-            log('Message changed: ack=' + msg.ack);
-            if (msg.ack === 1) emit('message_received', serializeMsg(msg));
-            if (msg.ack === 2) emit('message_delivered', serializeMsg(msg));
-            if (msg.ack === 3) emit('message_read', serializeMsg(msg));
+            // Only process ack changes, ignore other changes
+            if (msg.ack !== undefined) {
+              if (msg.ack === 1 && shouldProcessMessage(msg, 'received')) {
+                log('Message received: ack=1');
+                emit('message_received', serializeMsg(msg));
+              } else if (msg.ack === 2 && shouldProcessMessage(msg, 'delivered')) {
+                log('Message delivered: ack=2');
+                emit('message_delivered', serializeMsg(msg));
+              } else if (msg.ack === 3 && shouldProcessMessage(msg, 'read')) {
+                log('Message read: ack=3');
+                emit('message_read', serializeMsg(msg));
+              }
+            }
           });
           
-          Store.Msg.on('change:ack', (msg) => {
-            log('Message ack changed: ' + msg.ack);
-            if (msg.ack === 1) emit('message_received', serializeMsg(msg));
-            if (msg.ack === 2) emit('message_delivered', serializeMsg(msg));
-            if (msg.ack === 3) emit('message_read', serializeMsg(msg));
-          });
+          // Remove the duplicate change:ack listener since we handle it in 'change'
           
-          log('Message listeners attached to Store.Msg');
+          log('Message listeners attached to Store.Msg with deduplication');
         } else {
           log('Store.Msg exists but no .on method');
         }

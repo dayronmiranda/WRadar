@@ -82,7 +82,13 @@ class NatsClient {
       
       return pubAck;
     } catch (error) {
-      console.log(`[NATS] Publish failed: ${error.message}`);
+      console.log(`[NATS] Publish failed: ${error.code || error.message}`);
+      
+      // If it's a connection issue, mark as disconnected
+      if (error.code === '503' || error.message.includes('503') || error.message.includes('connection')) {
+        this.connected = false;
+      }
+      
       throw error;
     }
   }

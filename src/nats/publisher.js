@@ -29,14 +29,27 @@ class NatsPublisher {
       // Generate message ID for deduplication
       const msgID = this.generateMessageId(event);
       
-      const pubAck = await this.natsClient.publish(this.subject, event, {
+      // Add phone number to the event payload
+      const enrichedEvent = {
+        ...event,
+        phoneNumber: this.phoneNumber
+      };
+      
+      const pubAck = await this.natsClient.publish(this.subject, enrichedEvent, {
         msgID: msgID
       });
 
       console.log(`[NATS:Publisher] Published ${event.event} (seq: ${pubAck.seq})`);
       return true;
     } catch (error) {
-      console.log(`[NATS:Publisher] Failed to publish ${event.event}: ${error.message}`);
+      const errorCode = error.code || error.message;
+      console.log(`[NATS:Publisher] Failed to publish ${event.event}: ${errorCode}`);
+      
+      // If it's a 503 error, the NATS server might be down or not responding
+      if (errorCode.includes('503')) {
+        console.log('[NATS:Publisher] Server unavailable (503) - check NATS server status');
+      }
+      
       return false;
     }
   }

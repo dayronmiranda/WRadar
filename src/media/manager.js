@@ -3,10 +3,13 @@
  - Combines downloader, queue, and storage functionality
  - Handles media detection, validation, downloading, and storage
  - Provides circuit breaker, retry logic, and comprehensive state management
+ - Enhanced with whatsapp-web.js compatible downloader
 */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const MediaDownloader = require('./downloader');
+const MessageMedia = require('./message-media');
 
 // Media states
 const MEDIA_STATES = {
@@ -82,8 +85,34 @@ class MediaManager {
       successes: 0
     };
 
+    // Initialize enhanced downloader
+    this.downloader = new MediaDownloader(page, {
+      retryAttempts: this.config.retryAttempts,
+      retryDelayMs: this.config.retryDelayMs,
+      enableIntegrityCheck: this.config.enableIntegrityCheck,
+      enableDeduplication: this.config.enableDeduplication,
+      maxFileSize: this._parseFileSize(this.config.maxFileSize),
+      supportedTypes: this.config.downloadTypes
+    });
+
     // Ensure storage directory exists
     this._ensureDir(this.storageDir);
+
+    // Initialize downloader helpers
+    this._initializeDownloader();
+  }
+
+  /**
+   * Initialize the downloader with helper functions
+   * @private
+   */
+  async _initializeDownloader() {
+    try {
+      await this.downloader.injectHelpers();
+      console.log('[MediaManager] Enhanced downloader initialized');
+    } catch (error) {
+      console.log(`[MediaManager] Failed to initialize downloader: ${error.message}`);
+    }
   }
 
   // Public API Methods
@@ -330,9 +359,16 @@ class MediaManager {
 
   async _downloadMedia(messageId, rawData) {
     try {
+      // Use the enhanced downloader to get MessageMedia object
+      const messageMedia = await this.downloader.downloadMedia(rawData);
+      
+      if (!messageMedia) {
+        throw new Error('Download failed - no media returned');
+      }
+
       // Generate unique filename
       const fileName = this._generateUniqueFileName(messageId, rawData);
-      const extension = this._getFileExtension(rawData.type, rawData.mimetype);
+      const extension = messageMedia.getExtension();
       const fullFileName = `${fileName}.${extension}`;
       
       // Create directory structure (year/month)
@@ -347,33 +383,16 @@ class MediaManager {
       
       const filePath = path.join(monthDir, fullFileName);
       
-      // Download from browser
-      const downloadResult = await this._downloadFromBrowser(rawData.id, rawData);
-      
-      if (!downloadResult || !downloadResult.success || !downloadResult.data) {
-        throw new Error(downloadResult?.error || 'Empty media buffer received');
-      }
-      
-      // Convert base64 to buffer
-      const mediaBuffer = Buffer.from(downloadResult.data, 'base64');
-      
-      // Verify file integrity if enabled and hash available
-      if (this.config.enableIntegrityCheck && rawData.filehash) {
-        if (!this._verifyFileIntegrity(mediaBuffer, rawData.filehash)) {
-          throw new Error('File integrity check failed - hash mismatch');
-        }
-      }
-      
-      // Save media file
-      fs.writeFileSync(filePath, mediaBuffer);
+      // Save media file using MessageMedia's save method
+      await messageMedia.save(filePath);
       
       // Create metadata
       const metadata = {
         messageId: messageId,
         timestamp: timestamp,
         type: rawData.type,
-        mimetype: rawData.mimetype,
-        size: mediaBuffer.length,
+        mimetype: messageMedia.mimetype,
+        size: messageMedia.getActualSize(),
         expectedSize: rawData.size,
         downloadedAt: Date.now(),
         filePath: filePath,
@@ -387,7 +406,8 @@ class MediaManager {
           encFilehash: rawData.encFilehash,
           directPath: rawData.directPath,
           clientUrl: rawData.clientUrl
-        }
+        },
+        messageMedia: messageMedia.toJSON(false) // Don't include data in metadata
       };
       
       // Save metadata
@@ -398,7 +418,8 @@ class MediaManager {
         fileName: fullFileName,
         filePath: filePath,
         metadata: metadata,
-        size: mediaBuffer.length
+        size: messageMedia.getActualSize(),
+        messageMedia: messageMedia
       };
       
     } catch (error) {
@@ -413,9 +434,12 @@ class MediaManager {
     try {
       const downloadResult = await this.page.evaluate(async (msgIdObj, mediaInfo) => {
         try {
+          // Enhanced WhatsApp Web media download implementation
+          // Based on whatsapp-web.js approach
+          
           // Check if Store is available
-          if (!window.Store || !window.Store.Msg || !window.Store.downloadMedia) {
-            throw new Error('WhatsApp Store or download function not available');
+          if (!window.Store || !window.Store.Msg) {
+            throw new Error('WhatsApp Store not available');
           }
 
           // Find message
@@ -428,38 +452,105 @@ class MediaManager {
             throw new Error('Message not found in Store');
           }
 
-          // Check if message has downloadable media
+          // Check if message has media
           if (!message.type || !['image', 'video', 'audio', 'document', 'sticker', 'ptt'].includes(message.type)) {
             throw new Error('Message does not contain downloadable media');
           }
 
-          // console.log('[Browser] Downloading media for message:', msgIdObj._serialized);
+          // Check media availability
+          if (!message.mediaKey && !message.clientUrl && !message.directPath) {
+            throw new Error('Message has no media download information');
+          }
           
-          // Download media
-          const mediaBlob = await window.Store.downloadMedia(message);
-          
-          if (!mediaBlob) {
-            throw new Error('Download returned null/undefined');
+          // Check for expired status messages
+          if (message.from && message.from._serialized === 'status@broadcast') {
+            const messageAge = Date.now() - (message.t * 1000);
+            if (messageAge > 24 * 60 * 60 * 1000) { // 24 hours
+              throw new Error('Status message has expired (older than 24 hours)');
+            }
           }
 
-          // Convert to base64
+          // Download media using multiple methods (whatsapp-web.js approach)
+          let mediaBlob = null;
+          let downloadMethod = 'unknown';
+
+          // Method 1: Use message's own downloadMedia method (preferred)
+          if (message.downloadMedia && typeof message.downloadMedia === 'function') {
+            try {
+              mediaBlob = await message.downloadMedia({
+                downloadEvenIfExpensive: true,
+                rmrReason: 1
+              });
+              downloadMethod = 'message.downloadMedia';
+            } catch (e) {
+              console.log('[Browser] Method 1 failed:', e.message);
+            }
+          }
+
+          // Method 2: Use Store.downloadMedia if available
+          if (!mediaBlob && window.Store.downloadMedia && typeof window.Store.downloadMedia === 'function') {
+            try {
+              mediaBlob = await window.Store.downloadMedia(message, {
+                downloadEvenIfExpensive: true,
+                rmrReason: 1
+              });
+              downloadMethod = 'Store.downloadMedia';
+            } catch (e) {
+              console.log('[Browser] Method 2 failed:', e.message);
+            }
+          }
+
+          // Method 3: Try without options
+          if (!mediaBlob && message.downloadMedia) {
+            try {
+              mediaBlob = await message.downloadMedia();
+              downloadMethod = 'message.downloadMedia (no options)';
+            } catch (e) {
+              console.log('[Browser] Method 3 failed:', e.message);
+            }
+          }
+
+          // Method 4: Try Store without options
+          if (!mediaBlob && window.Store.downloadMedia) {
+            try {
+              mediaBlob = await window.Store.downloadMedia(message);
+              downloadMethod = 'Store.downloadMedia (no options)';
+            } catch (e) {
+              console.log('[Browser] Method 4 failed:', e.message);
+            }
+          }
+
+          if (!mediaBlob) {
+            throw new Error('All download methods failed - media may be expired or unavailable');
+          }
+
+          console.log('[Browser] Download successful using:', downloadMethod);
+
+          // Convert to base64 (whatsapp-web.js approach)
           let base64Data = '';
           
           if (mediaBlob instanceof Blob) {
+            // Handle Blob objects
             const arrayBuffer = await mediaBlob.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
-            const binaryString = Array.from(uint8Array, byte => String.fromCharCode(byte)).join('');
-            base64Data = btoa(binaryString);
+            base64Data = btoa(String.fromCharCode.apply(null, uint8Array));
+          } else if (mediaBlob instanceof ArrayBuffer) {
+            // Handle ArrayBuffer objects
+            const uint8Array = new Uint8Array(mediaBlob);
+            base64Data = btoa(String.fromCharCode.apply(null, uint8Array));
           } else if (typeof mediaBlob === 'string') {
+            // Handle string data
             if (mediaBlob.startsWith('data:')) {
+              // Data URL format
               base64Data = mediaBlob.split(',')[1];
             } else {
+              // Assume it's already base64
               base64Data = mediaBlob;
             }
-          } else if (mediaBlob.buffer || mediaBlob instanceof ArrayBuffer) {
-            const uint8Array = new Uint8Array(mediaBlob.buffer || mediaBlob);
-            const binaryString = Array.from(uint8Array, byte => String.fromCharCode(byte)).join('');
-            base64Data = btoa(binaryString);
+          } else if (mediaBlob && mediaBlob.buffer) {
+            // Handle objects with buffer property
+            const uint8Array = new Uint8Array(mediaBlob.buffer);
+            base64Data = btoa(String.fromCharCode.apply(null, uint8Array));
           } else {
             throw new Error('Unknown media blob format: ' + typeof mediaBlob);
           }
@@ -468,19 +559,27 @@ class MediaManager {
             throw new Error('Failed to convert media to base64');
           }
 
-          // console.log('[Browser] Successfully downloaded media, size:', base64Data.length);
+          // Validate base64 data
+          if (base64Data.length < 100) {
+            throw new Error('Downloaded data seems too small, possibly corrupted');
+          }
 
           return {
             success: true,
             data: base64Data,
-            size: base64Data.length
+            size: base64Data.length,
+            method: downloadMethod,
+            mediaType: message.type,
+            mimetype: message.mimetype || 'unknown'
           };
 
         } catch (error) {
-          // console.log('[Browser] Download error:', error.message);
           return {
             success: false,
-            error: error.message
+            error: error.message,
+            messageType: msgIdObj ? 'found' : 'not_found',
+            hasMediaKey: !!(msgIdObj && msgIdObj.mediaKey),
+            hasDirectPath: !!(msgIdObj && msgIdObj.directPath)
           };
         }
       }, messageIdObj, rawData);
